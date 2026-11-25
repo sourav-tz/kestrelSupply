@@ -1,0 +1,198 @@
+{
+  "info": {
+    "name": "Kestrel Support & Resolution Suite API",
+    "description": "Exported REST API collection for Authentication, Orders, Tickets, AI Agent Chat, Refunds, Escalations, Policies, and Audit Logs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000/api" },
+    { "key": "token", "value": "" },
+    { "key": "ticketId", "value": "TKT-100002" },
+    { "key": "escalationId", "value": "ESC-100001" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register Customer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Kabir Sharma\",\n  \"email\": \"kabir@example.com\",\n  \"password\": \"Customer@123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"aarav@kestrel.demo\",\n  \"password\": \"Customer@123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/auth/me"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "List My Orders",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/orders"
+          }
+        },
+        {
+          "name": "Get Order Details",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/orders/ORD-1041"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tickets & AI Agent Chat",
+      "item": [
+        {
+          "name": "Create Support Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/tickets",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_id\": \"ORD-1041\",\n  \"subject\": \"Mechanical switch chatter\",\n  \"description\": \"Spacebar double-registers intermittently.\",\n  \"category\": \"Refund Request\",\n  \"priority\": \"medium\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Chat With AI Support Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/tickets/{{ticketId}}/chat",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Please check eligibility and process a refund for ORD-1041.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Add Internal Staff Note",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/tickets/{{ticketId}}/notes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Verified serial batch and courier POD.\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Refunds & Escalations",
+      "item": [
+        {
+          "name": "Submit Refund Request (Idempotent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/refunds",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_id\": \"ORD-1041\",\n  \"reason\": \"Defective switch\",\n  \"idempotency_key\": \"postman-ord-1041-001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Escalations (Staff)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/escalations?decision=pending"
+          }
+        },
+        {
+          "name": "Decide Escalation (Staff)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/escalations/{{escalationId}}/decision",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"internal_note\": \"Hardware defect verified; approved full refund.\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Policies & Audit",
+      "item": [
+        {
+          "name": "Search Return Policy RAG",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/policies/search?q=electronics+return+window"
+          }
+        },
+        {
+          "name": "List Audit Logs (Staff)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/audit-logs?limit=50"
+          }
+        }
+      ]
+    }
+  ]
+}

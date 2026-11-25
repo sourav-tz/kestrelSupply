@@ -1,14 +1,14 @@
 # Kestrel — E-Commerce Customer Support, AI Resolution & Operations Suite
 
-A full-stack customer support, policy-grounded AI agent, automated refund engine, and human escalation workbench built with **React + TypeScript**, **FastAPI**, and **PostgreSQL / SQLite**.
+A full-stack customer support, policy-grounded AI agent, automated refund engine, and human escalation workbench built with **React (JSX)**, **FastAPI**, and **PostgreSQL / SQLite**.
 
 ---
 
 ## Architecture & Engineering Highlights
 
-- **Frontend (`frontend/`)**: React 18 (JSX), Vite, Lucide SVG iconography, responsive Customer Resolution Portal and Staff Operations Console.
+- **Frontend (`frontend/`)**: React 18 (JSX), Vite, Lucide SVG iconography, responsive Customer Resolution Portal and Staff Operations Console using the Nunito Variable typeface.
 - **Backend (`backend/`)**: Python + FastAPI REST API with OpenAPI/Swagger (`/docs`, `/redoc`), Pydantic v2 validation, bcrypt password hashing, JWT role-based access control (`customer`, `support_agent`, `admin`), and structured JSON logging with secret scrubbing.
-- **Database & Migrations (`backend/alembic/`)**: SQLAlchemy 2.0 ORM with Alembic migrations covering `users`, `orders`, `tickets`, `messages`, `refunds`, `escalations`, `internal_notes`, and `audit_logs`, including composite indexes, foreign keys, and unique `idempotency_key` enforcement.
+- **Database Choice & Migrations (`backend/alembic/`)**: **PostgreSQL 16** (configured in `docker-compose.yml` via `psycopg[binary]`) is the primary relational database, with **SQLite** supported as a zero-setup local fallback via SQLAlchemy 2.0 + Alembic migrations. This lets evaluators run locally in one command while preserving strict foreign keys, composite indexes, and unique `idempotency_key` constraints across `users`, `orders`, `tickets`, `messages`, `refunds`, `escalations`, `internal_notes`, and `audit_logs`.
 - **AI Agent & RAG Choice**:
   - **Why custom deterministic tool orchestration**: Rather than depending on a paid external framework or risking LLM-hallucinated refund approvals, the AI agent runs an explicit deterministic tool router (`get_order_details`, `search_return_policy`, `process_refund`, `escalate_to_human`) with a prompt-injection firewall and multi-turn conversation state.
   - **RAG Approach**: `backend/app/policies/rag.py` chunks the inspectable source policy document (`backend/app/policies/return_policy.md`) by policy section and category bullet, computing TF-IDF + category-tag boost scores so policy rules are transparent, auditable, and zero-cost to run locally. An optional OpenAI-compatible phrasing layer (`LLM_PROVIDER=openai_compatible`) can be enabled via environment variables without ever delegating authorization or refund execution to the LLM.
@@ -16,7 +16,8 @@ A full-stack customer support, policy-grounded AI agent, automated refund engine
 Detailed diagrams and API exports live in:
 - Architecture & Agent Flow: [docs/architecture.md](docs/architecture.md)
 - Database Schema & ER Diagram: [docs/database_schema.md](docs/database_schema.md)
-- Exported API Collection: [docs/api_collection.json](docs/api_collection.json)
+- Exported OpenAPI Spec: [docs/openapi.json](docs/openapi.json)
+- Exported Postman API Collection: [docs/api_collection.json](docs/api_collection.json)
 
 ---
 

@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kestrel-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kestrel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kestrel_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-kestrel_support}
+    ports:
+      - "5432:5432"
+    volumes:
+      - kestrel_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kestrel} -d ${POSTGRES_DB:-kestrel_support}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: kestrel-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kestrel}:${POSTGRES_PASSWORD:-kestrel_local_dev}@postgres:5432/${POSTGRES_DB:-kestrel_support}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-replace-with-a-secure-random-secret-key-at-least-32-chars}
+      AUTO_REFUND_LIMIT_INR: ${AUTO_REFUND_LIMIT_INR:-5000}
+      LLM_PROVIDER: ${LLM_PROVIDER:-local_deterministic}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head && python -m app.db.init_db && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: kestrel-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  kestrel_pgdata:
