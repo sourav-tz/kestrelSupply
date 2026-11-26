@@ -14,8 +14,10 @@ A full-stack customer support, policy-grounded AI agent, automated refund engine
   - **RAG Approach**: `backend/app/policies/rag.py` chunks the inspectable source policy document (`backend/app/policies/return_policy.md`) by policy section and category bullet, computing TF-IDF + category-tag boost scores so policy rules are transparent, auditable, and zero-cost to run locally. An optional OpenAI-compatible phrasing layer (`LLM_PROVIDER=openai_compatible`) can be enabled via environment variables without ever delegating authorization or refund execution to the LLM.
 
 Detailed diagrams and API exports live in:
-- Architecture & Agent Flow: [docs/architecture.md](docs/architecture.md)
-- Database Schema & ER Diagram: [docs/database_schema.md](docs/database_schema.md)
+- Architecture Diagram (Visual): [docs/architecture_diagram.jpg](docs/architecture_diagram.jpg)
+- Architecture & Agent Flow (Mermaid + Details): [docs/architecture.md](docs/architecture.md)
+- Database ER Diagram (Visual): [docs/er_diagram.jpg](docs/er_diagram.jpg)
+- Database Schema & ER Diagram (Mermaid + Details): [docs/database_schema.md](docs/database_schema.md)
 - Exported OpenAPI Spec: [docs/openapi.json](docs/openapi.json)
 - Exported Postman API Collection: [docs/api_collection.json](docs/api_collection.json)
 

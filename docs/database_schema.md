@@ -2,6 +2,8 @@
 
 ## Entity-Relationship Diagram
 
+![Kestrel PostgreSQL Database ER Diagram](./er_diagram.jpg)
+
 ```mermaid
 erDiagram
     USERS ||--o{ ORDERS : "places"

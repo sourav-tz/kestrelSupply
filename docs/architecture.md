@@ -2,6 +2,8 @@
 
 ## High-Level Architecture & Human-Review Flow
 
+![Kestrel System Architecture Diagram](./architecture_diagram.jpg)
+
 ```mermaid
 flowchart LR
     subgraph Client["React + TypeScript SPA"]
