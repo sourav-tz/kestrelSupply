@@ -6,7 +6,7 @@ A full-stack customer support, policy-grounded AI agent, automated refund engine
 
 ## Architecture & Engineering Highlights
 
-- **Frontend (`frontend/`)**: React 18 (JSX), Vite, Lucide SVG iconography, responsive Customer Resolution Portal and Staff Operations Console using the Nunito Variable typeface.
+- **Frontend (`frontend/`)**: React 18 (JSX), Vite, Lucide SVG iconography, responsive Customer Resolution Portal and Staff Operations Console using the Google Sans typeface.
 - **Backend (`backend/`)**: Python + FastAPI REST API with OpenAPI/Swagger (`/docs`, `/redoc`), Pydantic v2 validation, bcrypt password hashing, JWT role-based access control (`customer`, `support_agent`, `admin`), and structured JSON logging with secret scrubbing.
 - **Database Choice & Migrations (`backend/alembic/`)**: **PostgreSQL 16** (configured in `docker-compose.yml` via `psycopg[binary]`) is the primary relational database, with **SQLite** supported as a zero-setup local fallback via SQLAlchemy 2.0 + Alembic migrations. This lets evaluators run locally in one command while preserving strict foreign keys, composite indexes, and unique `idempotency_key` constraints across `users`, `orders`, `tickets`, `messages`, `refunds`, `escalations`, `internal_notes`, and `audit_logs`.
 - **AI Agent & RAG Choice**:
@@ -39,8 +39,8 @@ Copy `.env.example` to `.env` before customizing configuration (never commit `.e
 | `JWT_SECRET_KEY` | `replace-with-a-secure-random-secret-key-at-least-32-chars` | HS256 signing key for JWT bearer tokens |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `720` | Token lifetime in minutes |
 | `AUTO_REFUND_LIMIT_INR` | `5000` | Maximum automated refund threshold in INR; higher values escalate to human review |
-| `LLM_PROVIDER` | `local_deterministic` | `local_deterministic` (no API key needed) or `openai_compatible` |
-| `LLM_API_KEY` | *(empty)* | Optional API key when using `openai_compatible` phrasing |
+| `LLM_PROVIDER` | `local_deterministic` | `local_deterministic` (no API key needed), `gemini`, or `openai_compatible` |
+| `LLM_API_KEY` | *(empty)* | Optional Gemini or OpenAI-compatible API key |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Allowed frontend origins |
 
 ---
@@ -84,7 +84,7 @@ docker compose up --build
 
 - **Frontend**: http://localhost:3000
 - **Backend API & Swagger Docs**: http://localhost:8000/docs
-- **PostgreSQL**: `localhost:5432` (database `kestrel_support`)
+- **PostgreSQL**: host port `5433` (container `5432`, database `kestrel_support` — avoids colliding with any local PostgreSQL on `5432`)
 
 ---
 
@@ -103,7 +103,7 @@ All demo accounts are pre-seeded idempotently by `app/db/seed.py` (and also avai
 
 ## Automated Tests
 
-The backend integration suite verifies all mandatory business rules, RBAC isolation, multi-turn agent clarification, idempotency, prompt-injection defense, RAG retrieval, and DB failure handling:
+The backend integration suite runs directly against an isolated PostgreSQL test database (`<DATABASE_URL>_test`, e.g. `support_desk_test`, or `TEST_DATABASE_URL` if set) and verifies all mandatory business rules, RBAC isolation, multi-turn agent clarification, idempotency, prompt-injection defense, RAG retrieval, and DB failure handling:
 
 ```bash
 cd backend

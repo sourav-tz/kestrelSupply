@@ -16,7 +16,7 @@ from app.schemas.ticket import (
     TicketResponse,
     TicketStatusUpdateRequest,
 )
-from app.services.agent_service import handle_customer_chat_turn
+from app.services.agent_service import handle_customer_chat_turn, respond_to_existing_message
 from app.services.ticket_service import (
     add_internal_note,
     build_ticket_detail,
@@ -81,6 +81,14 @@ def create_support_ticket(
         priority=payload.priority,
         order_id=payload.order_id,
     )
+    if payload.auto_reply and ticket.messages:
+        respond_to_existing_message(
+            db,
+            ticket=ticket,
+            customer=current_user,
+            customer_msg=ticket.messages[0],
+        )
+        db.refresh(ticket)
     return TicketDetailResponse.model_validate(build_ticket_detail(db, ticket, current_user))
 
 

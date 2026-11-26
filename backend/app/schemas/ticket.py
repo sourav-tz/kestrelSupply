@@ -18,6 +18,7 @@ class TicketCreateRequest(BaseModel):
         "Other",
     ] = "Refund Request"
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
+    auto_reply: bool = False
 
 
 class TicketStatusUpdateRequest(BaseModel):

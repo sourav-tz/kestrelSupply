@@ -1,17 +1,16 @@
 import React, { useState } from "react";
 import {
-  AlertCircle,
   ArrowRight,
+  Check,
   ChevronDown,
-  ChevronUp,
   Layers,
   Lock,
   ShieldCheck,
   UserPlus,
-  Zap,
 } from "lucide-react";
 import { api, ApiClientError } from "../api/client";
 import { BrandMark } from "./BrandMark";
+import { useToast } from "./ToastProvider";
 
 const DEMO_ACCOUNTS = [
   {
@@ -50,23 +49,22 @@ export function AuthView({ onAuthenticated }) {
   const [email, setEmail] = useState("aarav@kestrel.demo");
   const [password, setPassword] = useState("Customer@123");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [showDemos, setShowDemos] = useState(false);
+  const toast = useToast();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(null);
 
     if (mode === "register" && name.trim().length < 2) {
-      setError("Please enter your full name (at least 2 characters).");
+      toast.error("Please enter your full name (at least 2 characters).", "Validation");
       return;
     }
     if (!email.includes("@")) {
-      setError("Please enter a valid email address.");
+      toast.error("Please enter a valid email address.", "Validation");
       return;
     }
     if (mode === "register" && password.length < 8) {
-      setError("Password must be at least 8 characters long.");
+      toast.error("Password must be at least 8 characters long.", "Validation");
       return;
     }
 
@@ -79,9 +77,9 @@ export function AuthView({ onAuthenticated }) {
       onAuthenticated(result);
     } catch (err) {
       if (err instanceof ApiClientError) {
-        setError(err.message);
+        toast.error(err.message, "Authentication Failed");
       } else {
-        setError("Authentication failed. Please retry.");
+        toast.error("Authentication failed. Please retry.", "Authentication Failed");
       }
     } finally {
       setLoading(false);
@@ -90,10 +88,13 @@ export function AuthView({ onAuthenticated }) {
 
   const applyDemo = (demoEmail, demoPass) => {
     setMode("login");
-    setError(null);
     setEmail(demoEmail);
     setPassword(demoPass);
+    setShowDemos(false);
+    toast.info(`Loaded credentials for ${demoEmail}.`, "Quick-Fill Ready");
   };
+
+  const activeDemo = DEMO_ACCOUNTS.find((acc) => acc.email === email && mode === "login");
 
   return (
     <div className="landing-canvas">
@@ -171,16 +172,6 @@ export function AuthView({ onAuthenticated }) {
 
             <div className="landing-glass-card">
               <div className="landing-glass-title">
-                <Zap size={15} color="#DF6B3E" style={{ flexShrink: 0 }} />
-                <span>₹5,000 Escalation Gate</span>
-              </div>
-              <p className="landing-glass-desc">
-                High-value refunds automatically route to human specialists
-              </p>
-            </div>
-
-            <div className="landing-glass-card">
-              <div className="landing-glass-title">
                 <Layers size={15} color="#DF6B3E" style={{ flexShrink: 0 }} />
                 <span>Idempotent Execution</span>
               </div>
@@ -209,10 +200,7 @@ export function AuthView({ onAuthenticated }) {
                 type="button"
                 className={`nav-tab ${mode === "login" ? "active" : ""}`}
                 style={{ flex: 1, justifyContent: "center" }}
-                onClick={() => {
-                  setMode("login");
-                  setError(null);
-                }}
+                onClick={() => setMode("login")}
               >
                 <Lock size={14} />
                 Sign In
@@ -223,7 +211,6 @@ export function AuthView({ onAuthenticated }) {
                 style={{ flex: 1, justifyContent: "center" }}
                 onClick={() => {
                   setMode("register");
-                  setError(null);
                   setEmail("");
                   setPassword("");
                 }}
@@ -244,18 +231,6 @@ export function AuthView({ onAuthenticated }) {
             >
               {mode === "login" ? "Welcome back to Kestrel" : "Open a customer account"}
             </h2>
-            <p style={{ margin: "0 0 22px", color: "var(--ink-secondary)", fontSize: 13.5 }}>
-              {mode === "login"
-                ? "Authenticate to access your orders, support tickets, or operations console."
-                : "Self-registered accounts are provisioned with Customer role access."}
-            </p>
-
-            {error && (
-              <div className="alert alert-error" style={{ marginBottom: 18 }}>
-                <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-                <span>{error}</span>
-              </div>
-            )}
 
             <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 15 }}>
               {mode === "register" && (
@@ -326,73 +301,71 @@ export function AuthView({ onAuthenticated }) {
               </button>
             </form>
 
-            {/* Clean Evaluation Account Switcher */}
+            {/* Smooth Animated Evaluation Account Dropdown */}
             <div style={{ marginTop: 18 }}>
               <button
                 type="button"
+                aria-expanded={showDemos}
+                className={`demo-dropdown-trigger ${showDemos ? "open" : ""}`}
                 onClick={() => setShowDemos((prev) => !prev)}
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "8px 12px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border-hairline)",
-                  background: "var(--bg-inset)",
-                  color: "var(--ink-secondary)",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
               >
-                <span>Quick-Fill Evaluation Accounts</span>
-                {showDemos ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <span>Quick-Fill Evaluation Accounts</span>
+                  {activeDemo && (
+                    <span
+                      className="badge badge-copper"
+                      style={{ fontSize: 10, padding: "2px 7px", whiteSpace: "nowrap" }}
+                    >
+                      {activeDemo.label}
+                    </span>
+                  )}
+                </span>
+                <ChevronDown size={15} className={`demo-chevron ${showDemos ? "open" : ""}`} />
               </button>
 
-              {showDemos && (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: 8,
-                    marginTop: 8,
-                  }}
-                >
-                  {DEMO_ACCOUNTS.map((acc) => {
-                    const selected = email === acc.email && mode === "login";
-                    return (
-                      <button
-                        key={acc.email}
-                        type="button"
-                        onClick={() => applyDemo(acc.email, acc.pass)}
-                        style={{
-                          textAlign: "left",
-                          padding: "8px 10px",
-                          borderRadius: 8,
-                          border: selected
-                            ? "1px solid var(--accent-copper)"
-                            : "1px solid var(--border-hairline)",
-                          background: selected ? "var(--accent-copper-soft)" : "#FFFFFF",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
-                          <span style={{ fontWeight: 700, fontSize: 12, color: "var(--ink-primary)" }}>
-                            {acc.label}
-                          </span>
-                          <span className="badge badge-slate" style={{ fontSize: 9, padding: "1px 5px" }}>
-                            {acc.roleLabel}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 11, color: "var(--ink-secondary)", marginTop: 2 }}>
-                          {acc.email}
-                        </div>
-                      </button>
-                    );
-                  })}
+              <div className={`demo-dropdown-panel ${showDemos ? "open" : ""}`}>
+                <div className="demo-dropdown-inner">
+                  <div className="demo-dropdown-list">
+                    {DEMO_ACCOUNTS.map((acc) => {
+                      const selected = email === acc.email && mode === "login";
+                      const initials = acc.label
+                        .split(" ")
+                        .map((part) => part[0])
+                        .join("");
+                      return (
+                        <button
+                          key={acc.email}
+                          type="button"
+                          className={`demo-option ${selected ? "selected" : ""}`}
+                          onClick={() => applyDemo(acc.email, acc.pass)}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                            <div className="demo-avatar">{initials}</div>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 12.5, color: "var(--ink-primary)", lineHeight: 1.2 }}>
+                                {acc.label}
+                              </div>
+                              <div style={{ fontSize: 11, color: "var(--ink-secondary)", marginTop: 1 }}>
+                                {acc.email}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
+                            <span
+                              className="badge badge-slate"
+                              style={{ fontSize: 9.5, padding: "2px 7px", whiteSpace: "nowrap" }}
+                            >
+                              {acc.roleLabel}
+                            </span>
+                            {selected && <Check size={14} color="var(--accent-copper)" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </section>

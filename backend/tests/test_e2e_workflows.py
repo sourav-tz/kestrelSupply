@@ -373,3 +373,223 @@ def test_10_rag_policy_search_accuracy(client):
     results = res.json()["results"]
     assert len(results) >= 1
     assert "7 days" in results[0]["content"]
+
+
+def test_11_greeting_does_not_leak_example_order_id(client):
+    # Register a fresh user with 0 orders (like the user's testtest account)
+    reg = client.post(
+        "/api/auth/register",
+        json={"name": "Test User", "email": "fresh_greet@example.com", "password": "Password@123"},
+    )
+    assert reg.status_code == 201
+    headers = _auth_header(reg.json()["access_token"])
+
+    tkt = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "subject": "testtest",
+            "description": "General inquiry",
+            "category": "Refund Request",
+            "priority": "medium",
+        },
+    ).json()
+
+    # Turn 1: "hi" -> must respond as greeting, NOT ask for ORD-1041
+    t1 = client.post(f"/api/tickets/{tkt['id']}/chat", headers=headers, json={"content": "hi"})
+    assert t1.status_code == 200
+    assert t1.json()["tools_executed"] == []
+    assert "ORD-1041" not in t1.json()["agent_message"]["content"]
+    assert "hello" in t1.json()["agent_message"]["content"].lower()
+
+    # Turn 2: refund request without order ID -> asks for Order ID without fabricating ORD-1041
+    t2 = client.post(
+        f"/api/tickets/{tkt['id']}/chat",
+        headers=headers,
+        json={"content": "Please check eligibility and process a refund for my order"},
+    )
+    assert t2.status_code == 200
+    assert "ORD-1041" not in t2.json()["agent_message"]["content"]
+    assert "Order ID" in t2.json()["agent_message"]["content"]
+
+    # Turn 3: "hello" -> responds as greeting again, does NOT complain about ORD-1041
+    t3 = client.post(f"/api/tickets/{tkt['id']}/chat", headers=headers, json={"content": "hello"})
+    assert t3.status_code == 200
+    assert "ORD-1041" not in t3.json()["agent_message"]["content"]
+    assert "hello" in t3.json()["agent_message"]["content"].lower()
+
+
+def test_12_undelivered_shipped_order_refund_blocked(client, test_db_session):
+    token = login_token(client, "aarav@kestrel.demo", "Customer@123")
+    headers = _auth_header(token)
+
+    tkt = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "order_id": "ORD-1045",
+            "subject": "Cancel shipped order",
+            "description": "Item is still in transit.",
+            "category": "Refund Request",
+            "priority": "medium",
+        },
+    ).json()
+
+    resp = client.post(
+        f"/api/tickets/{tkt['id']}/chat",
+        headers=headers,
+        json={"content": "Please refund ORD-1045 right now."},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["refund_created"] is None
+    assert "not been delivered" in data["agent_message"]["content"].lower()
+
+    db = test_db_session()
+    try:
+        assert db.query(Refund).filter(Refund.order_id == "ORD-1045").count() == 0
+    finally:
+        db.close()
+
+
+def test_13_partial_refund_amount_extracted_and_processed(client, test_db_session):
+    token = login_token(client, "aarav@kestrel.demo", "Customer@123")
+    headers = _auth_header(token)
+
+    tkt = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "order_id": "ORD-1041",
+            "subject": "Partial refund for missing keycap puller",
+            "description": "Accessory missing from box.",
+            "category": "Refund Request",
+            "priority": "low",
+        },
+    ).json()
+
+    resp = client.post(
+        f"/api/tickets/{tkt['id']}/chat",
+        headers=headers,
+        json={"content": "Please issue a partial refund of ₹1,500 for ORD-1041."},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "process_refund" in data["tools_executed"]
+    assert data["refund_created"]["status"] == "processed"
+    assert data["refund_created"]["amount"] == 1500.0
+
+
+def test_14_customer_requested_human_escalation(client, test_db_session):
+    token = login_token(client, "aarav@kestrel.demo", "Customer@123")
+    headers = _auth_header(token)
+
+    tkt = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "order_id": "ORD-1042",
+            "subject": "Need supervisor assistance",
+            "description": "Speaking with human team.",
+            "category": "Other",
+            "priority": "medium",
+        },
+    ).json()
+
+    resp = client.post(
+        f"/api/tickets/{tkt['id']}/chat",
+        headers=headers,
+        json={"content": "Connect me with a human support specialist please."},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "escalate_to_human" in data["tools_executed"]
+    assert data["ticket_status"] == "escalated"
+    assert data["escalation_created"]["decision"] == "pending"
+
+
+def test_15_agent_blocks_excessive_refund_amount(client, test_db_session):
+    token = login_token(client, "aarav@kestrel.demo", "Customer@123")
+    headers = _auth_header(token)
+
+    tkt = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "order_id": "ORD-1041",
+            "subject": "Excessive refund attempt",
+            "description": "Testing amount bounds.",
+            "category": "Refund Request",
+            "priority": "medium",
+        },
+    ).json()
+
+    resp = client.post(
+        f"/api/tickets/{tkt['id']}/chat",
+        headers=headers,
+        json={"content": "Refund ₹9,999 for ORD-1041."},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["refund_created"] is None
+    assert "between ₹1.00 and ₹4,299.00" in data["agent_message"]["content"]
+
+    db = test_db_session()
+    try:
+        assert db.query(Refund).filter(Refund.order_id == "ORD-1041").count() == 0
+    finally:
+        db.close()
+
+
+def test_16_policy_question_inside_order_ticket_uses_rag_not_refund(client):
+    token = login_token(client, "aarav@kestrel.demo", "Customer@123")
+    headers = _auth_header(token)
+
+    tkt = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "order_id": "ORD-1042",
+            "subject": "Policy check on existing order ticket",
+            "description": "Checking return policy.",
+            "category": "Refund Request",
+            "priority": "medium",
+        },
+    ).json()
+
+    resp = client.post(
+        f"/api/tickets/{tkt['id']}/chat",
+        headers=headers,
+        json={"content": "What is the return policy for Electronics and Apparel?"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "search_return_policy" in data["tools_executed"]
+    assert "process_refund" not in data["tools_executed"]
+    reply_lower = data["agent_message"]["content"].lower()
+    assert "7 days" in reply_lower
+    assert "14 days" in reply_lower
+
+
+def test_17_ticket_create_with_auto_reply_generates_agent_response(client):
+    token = login_token(client, "aarav@kestrel.demo", "Customer@123")
+    headers = _auth_header(token)
+
+    resp = client.post(
+        "/api/tickets",
+        headers=headers,
+        json={
+            "order_id": "ORD-1041",
+            "subject": "Initial message auto reply",
+            "description": "What is the status of my order?",
+            "category": "Refund Request",
+            "priority": "medium",
+            "auto_reply": True,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    messages = resp.json()["messages"]
+    assert len(messages) == 2
+    assert messages[0]["sender_type"] == "customer"
+    assert messages[1]["sender_type"] == "ai_agent"
+    assert "ORD-1041" in messages[1]["content"]

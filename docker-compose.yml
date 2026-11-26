@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kestrel_local_dev}
       POSTGRES_DB: ${POSTGRES_DB:-kestrel_support}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - kestrel_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,6 +17,7 @@ services:
       retries: 10
 
   backend:
+    image: ${DOCKERHUB_REPO:-souravoz/assignment3}:backend
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -31,14 +32,16 @@ services:
       AUTO_REFUND_LIMIT_INR: ${AUTO_REFUND_LIMIT_INR:-5000}
       LLM_PROVIDER: ${LLM_PROVIDER:-local_deterministic}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
       CORS_ORIGINS: http://localhost:3000,http://localhost:5173
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     command: >
       sh -c "alembic upgrade head && python -m app.db.init_db && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   frontend:
+    image: ${DOCKERHUB_REPO:-souravoz/assignment3}:frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile

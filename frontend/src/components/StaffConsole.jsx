@@ -1,15 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
   BookOpen,
   Bot,
   Check,
-  CheckCircle2,
   ClipboardList,
   Filter,
   HelpCircle,
   Lock,
-  LogOut,
   RefreshCw,
   Search,
   Send,
@@ -22,6 +19,7 @@ import {
 import { api, ApiClientError } from "../api/client";
 import { formatDateTime, formatINR, formatLabel, formatShortDate } from "../utils/format";
 import { BrandMark, StatusBadge } from "./BrandMark";
+import { useToast } from "./ToastProvider";
 
 export function StaffConsole({ user, onLogout }) {
   const [tab, setTab] = useState("triage");
@@ -43,18 +41,17 @@ export function StaffConsole({ user, onLogout }) {
 
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
+  const toast = useToast();
 
   // Staff actions
   const [replyText, setReplyText] = useState("");
   const [noteText, setNoteText] = useState("");
   const [decisionNote, setDecisionNote] = useState("");
   const [busyAction, setBusyAction] = useState(false);
+  const staffChatStreamRef = useRef(null);
 
   const loadTicketsAndEscalations = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const [tktList, escList] = await Promise.all([
         api.listTickets({
@@ -68,11 +65,11 @@ export function StaffConsole({ user, onLogout }) {
       setEscalations(escList);
       setSelectedTicketId((prev) => prev || (tktList[0]?.id ?? null));
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to load operations queue.");
+      toast.error(err instanceof ApiClientError ? err.message : "Failed to load operations queue.", "Queue Error");
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, priorityFilter, searchTerm]);
+  }, [statusFilter, priorityFilter, searchTerm, toast]);
 
   useEffect(() => {
     void loadTicketsAndEscalations();
@@ -84,11 +81,11 @@ export function StaffConsole({ user, onLogout }) {
       const detail = await api.getTicketDetail(ticketId);
       setTicketDetail(detail);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to inspect ticket.");
+      toast.error(err instanceof ApiClientError ? err.message : "Failed to inspect ticket.", "Ticket Error");
     } finally {
       setLoadingDetail(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     if (selectedTicketId) {
@@ -97,6 +94,12 @@ export function StaffConsole({ user, onLogout }) {
       setTicketDetail(null);
     }
   }, [selectedTicketId, loadDetail]);
+
+  useEffect(() => {
+    if (tab === "triage" && staffChatStreamRef.current) {
+      staffChatStreamRef.current.scrollTop = staffChatStreamRef.current.scrollHeight;
+    }
+  }, [tab, selectedTicketId, ticketDetail?.messages?.length]);
 
   useEffect(() => {
     if (tab === "audit") {
@@ -112,13 +115,13 @@ export function StaffConsole({ user, onLogout }) {
     e.preventDefault();
     if (!selectedTicketId || !replyText.trim()) return;
     setBusyAction(true);
-    setError(null);
     try {
       await api.sendStaffReply(selectedTicketId, { content: replyText.trim() });
       setReplyText("");
+      toast.success("Specialist reply sent to customer.", "Reply Sent");
       await Promise.all([loadDetail(selectedTicketId), loadTicketsAndEscalations()]);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to send reply.");
+      toast.error(err instanceof ApiClientError ? err.message : "Failed to send reply.", "Reply Error");
     } finally {
       setBusyAction(false);
     }
@@ -128,14 +131,13 @@ export function StaffConsole({ user, onLogout }) {
     e.preventDefault();
     if (!selectedTicketId || noteText.trim().length < 2) return;
     setBusyAction(true);
-    setError(null);
     try {
       await api.addInternalNote(selectedTicketId, { note: noteText.trim() });
       setNoteText("");
       await loadDetail(selectedTicketId);
-      setNotice("Internal staff note recorded.");
+      toast.success("Internal staff note recorded.", "Note Saved");
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to save note.");
+      toast.error(err instanceof ApiClientError ? err.message : "Failed to save note.", "Note Error");
     } finally {
       setBusyAction(false);
     }
@@ -144,13 +146,12 @@ export function StaffConsole({ user, onLogout }) {
   const handleStatusChange = async (newStatus, newPriority) => {
     if (!selectedTicketId) return;
     setBusyAction(true);
-    setError(null);
     try {
       await api.updateTicketStatus(selectedTicketId, { status: newStatus, priority: newPriority });
       await Promise.all([loadDetail(selectedTicketId), loadTicketsAndEscalations()]);
-      setNotice("Ticket metadata updated.");
+      toast.success("Ticket metadata updated.", "Ticket Updated");
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to update ticket.");
+      toast.error(err instanceof ApiClientError ? err.message : "Failed to update ticket.", "Update Error");
     } finally {
       setBusyAction(false);
     }
@@ -159,20 +160,19 @@ export function StaffConsole({ user, onLogout }) {
   const handleEscalationDecision = async (escalationId, decision, noteOverride) => {
     const note = (noteOverride ?? decisionNote).trim() || `Reviewed by ${user.name} (${decision})`;
     setBusyAction(true);
-    setError(null);
     try {
       await api.decideEscalation(escalationId, {
         decision,
         internal_note: note,
       });
       setDecisionNote("");
-      setNotice(`Escalation ${escalationId} marked as ${formatLabel(decision)}.`);
+      toast.success(`Escalation ${escalationId} marked as ${formatLabel(decision)}.`, "Decision Recorded");
       await loadTicketsAndEscalations();
       if (selectedTicketId) {
         await loadDetail(selectedTicketId);
       }
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to submit escalation decision.");
+      toast.error(err instanceof ApiClientError ? err.message : "Failed to submit escalation decision.", "Decision Error");
     } finally {
       setBusyAction(false);
     }
@@ -181,17 +181,16 @@ export function StaffConsole({ user, onLogout }) {
   const handleRefundDecision = async (refundId, decision) => {
     const note = decisionNote.trim() || `Specialist ${user.name} ${decision} refund request.`;
     setBusyAction(true);
-    setError(null);
     try {
       await api.decideRefund(refundId, { decision, decision_note: note });
       setDecisionNote("");
-      setNotice(`Refund ${refundId} ${decision}.`);
+      toast.success(`Refund ${refundId} ${decision}.`, "Refund Updated");
       await loadTicketsAndEscalations();
       if (selectedTicketId) {
         await loadDetail(selectedTicketId);
       }
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Refund decision failed.");
+      toast.error(err instanceof ApiClientError ? err.message : "Refund decision failed.", "Refund Error");
     } finally {
       setBusyAction(false);
     }
@@ -278,9 +277,10 @@ export function StaffConsole({ user, onLogout }) {
                 alignItems: "center",
                 gap: 8,
                 padding: "5px 10px",
-                background: "var(--bg-obsidian)",
-                color: "var(--ink-inverse)",
+                background: "rgba(247, 243, 234, 0.08)",
+                color: "#F7F3EA",
                 borderRadius: 8,
+                border: "1px solid rgba(247, 243, 234, 0.18)",
               }}
             >
               <ShieldCheck size={14} color="#DF6B3E" />
@@ -290,37 +290,13 @@ export function StaffConsole({ user, onLogout }) {
               </span>
             </div>
             <button type="button" className="btn btn-secondary btn-sm" onClick={onLogout}>
-              <LogOut size={13} />
-              Sign Out
+              Log Out
             </button>
           </div>
         </div>
       </header>
 
       <main className="page-container">
-        {error && (
-          <div className="alert alert-error" style={{ marginBottom: 16 }}>
-            <AlertCircle size={16} />
-            <span style={{ flex: 1 }}>{error}</span>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setError(null)}>
-              Dismiss
-            </button>
-          </div>
-        )}
-        {notice && (
-          <div className="alert alert-success" style={{ marginBottom: 16 }}>
-            <CheckCircle2 size={16} />
-            <span style={{ flex: 1 }}>{notice}</span>
-            <button
-              type="button"
-              onClick={() => setNotice(null)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "inherit" }}
-            >
-              <X size={15} />
-            </button>
-          </div>
-        )}
-
         {/* TRIAGE QUEUE TAB */}
         {tab === "triage" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -453,7 +429,7 @@ export function StaffConsole({ user, onLogout }) {
                       <h2 style={{ margin: "6px 0 0", fontSize: 17 }}>{ticketDetail.subject}</h2>
                     </div>
 
-                    <div style={{ flex: 1, padding: 16, overflowY: "auto", maxHeight: 360, background: "#F5F1E7", display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div ref={staffChatStreamRef} style={{ flex: 1, padding: 16, overflowY: "auto", maxHeight: 360, background: "#F4EFE4", display: "flex", flexDirection: "column", gap: 12 }}>
                       {ticketDetail.messages.map((msg) => (
                         <div key={msg.id} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ink-secondary)", fontWeight: 600 }}>

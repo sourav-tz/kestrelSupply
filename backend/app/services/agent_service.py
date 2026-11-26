@@ -47,6 +47,16 @@ _REFUND_KEYWORDS = (
 _ESCALATION_KEYWORDS = ("human", "specialist", "supervisor", "manager", "escalate", "real person")
 _POLICY_KEYWORDS = ("policy", "window", "days", "rule", "eligible", "eligibility", "electronics", "apparel", "homeware", "beauty")
 _ORDER_KEYWORDS = ("status", "delivery", "delivered", "track", "shipment", "details")
+_EXPLICIT_REFUND_ACTION_RE = re.compile(
+    r"\b(?:process|issue|give|request|want|need|get|initiate|submit)\b.{0,25}\b(?:refund|return|money\s+back)\b",
+    re.IGNORECASE,
+)
+
+
+_GREETING_RE = re.compile(
+    r"^\s*(?:hi+|hello+|hey+|hlo|namaste|hola|good\s+(?:morning|afternoon|evening)|thanks?|thank\s+you|ok(?:ay)?)[!.,?\s]*$",
+    re.IGNORECASE,
+)
 
 
 def detect_prompt_injection(text: str) -> Optional[str]:
@@ -57,14 +67,20 @@ def detect_prompt_injection(text: str) -> Optional[str]:
     return None
 
 
+def _is_pure_greeting(text: str) -> bool:
+    return bool(_GREETING_RE.match(text))
+
+
 def _extract_order_id(text: str, ticket: Ticket, history: List[Message]) -> Optional[str]:
     match = _ORDER_ID_RE.search(text)
     if match:
         return match.group(1).upper()
     if ticket.order_id:
         return ticket.order_id.upper()
-    # Check multi-turn conversation history newest-first
+    # Check multi-turn customer messages only (never match example IDs from AI replies)
     for msg in reversed(history):
+        if msg.sender_type != "customer":
+            continue
         hist_match = _ORDER_ID_RE.search(msg.content)
         if hist_match:
             return hist_match.group(1).upper()
@@ -89,8 +105,14 @@ def _has_any_keyword(text: str, keywords: Tuple[str, ...]) -> bool:
 
 
 def _infer_intent_from_history(current_text: str, ticket: Ticket, history: List[Message]) -> str:
+    if _is_pure_greeting(current_text):
+        return "general"
     if _has_any_keyword(current_text, _ESCALATION_KEYWORDS):
         return "escalate"
+    # Policy questions (e.g. "What is the return policy for Electronics and Apparel?")
+    # must route to RAG policy lookup unless the user explicitly asks to process/request a refund.
+    if _has_any_keyword(current_text, ("policy", "rule", "window")) and not _EXPLICIT_REFUND_ACTION_RE.search(current_text):
+        return "policy"
     if _has_any_keyword(current_text, _REFUND_KEYWORDS):
         return "refund"
     if _has_any_keyword(current_text, _POLICY_KEYWORDS):
@@ -105,41 +127,134 @@ def _infer_intent_from_history(current_text: str, ticket: Ticket, history: List[
             return "refund"
         return "order_status"
 
-    if ticket.category in ("Refund Request", "Damaged Item") and len(history) <= 1:
-        return "refund"
-    if ticket.category == "Policy Inquiry":
-        return "policy"
     return "general"
+
+
+def _call_gemini_generate(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    temperature: float = 0.2,
+    response_mime_type: Optional[str] = None,
+) -> Optional[str]:
+    settings = get_settings()
+    base = (settings.LLM_BASE_URL or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    model = settings.LLM_MODEL or "gemini-2.5-flash"
+    if not base.endswith("v1beta") and not base.endswith("v1"):
+        base = "https://generativelanguage.googleapis.com/v1beta"
+    url = f"{base}/models/{model}:generateContent"
+
+    generation_config: Dict[str, Any] = {"temperature": temperature}
+    if response_mime_type:
+        generation_config["responseMimeType"] = response_mime_type
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": generation_config,
+    }
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            resp = client.post(
+                url,
+                headers={
+                    "x-goog-api-key": settings.LLM_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                return None
+            parts = candidates[0].get("content", {}).get("parts") or []
+            text = "".join(p.get("text", "") for p in parts).strip()
+            return text or None
+    except Exception as exc:
+        logger.warning("gemini_api_fallback", extra={"reason": str(exc)})
+        return None
+
+
+def _classify_intent_with_gemini(
+    current_text: str,
+    ticket: Ticket,
+    history: List[Message],
+) -> Optional[Dict[str, Any]]:
+    settings = get_settings()
+    if settings.LLM_PROVIDER != "gemini" or not settings.LLM_API_KEY:
+        return None
+
+    recent_turns = "\n".join(
+        f"{m.sender_type}: {m.content}" for m in history[-6:]
+    )
+    sys_prompt = (
+        "Classify the customer's support message into one intent: "
+        "'refund', 'order_status', 'policy', 'escalate', or 'general'. "
+        "Return strict JSON with keys: intent (string), order_id (string or null), requested_amount (number or null)."
+    )
+    user_prompt = (
+        f"Ticket category: {ticket.category} | Linked order: {ticket.order_id or 'None'}\n"
+        f"Recent conversation:\n{recent_turns}\n\nLatest customer message: {current_text}"
+    )
+    raw = _call_gemini_generate(
+        sys_prompt,
+        user_prompt,
+        temperature=0.0,
+        response_mime_type="application/json",
+    )
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if parsed.get("intent") in ("refund", "order_status", "policy", "escalate", "general"):
+            return parsed
+    except Exception:
+        return None
+    return None
 
 
 def _maybe_polish_with_external_llm(
     user_message: str,
     verified_facts: Dict[str, Any],
     fallback_response: str,
-) -> str:
+) -> Tuple[str, bool]:
     """
-    Optional external LLM phrasing layer.
+    Optional external LLM phrasing layer (Gemini or OpenAI-compatible).
     All tool execution, policy evaluation, and refund decisions are already finalized
     on the server before this runs; the LLM only formats verified facts if configured.
     """
     settings = get_settings()
-    if settings.LLM_PROVIDER != "openai_compatible" or not settings.LLM_API_KEY:
-        return fallback_response
+    if not settings.LLM_API_KEY or settings.LLM_PROVIDER == "local_deterministic":
+        return fallback_response, False
 
     system_prompt = (
-        "You are Kestrel Support Assistant. Rephrase ONLY the verified server facts below into a clear, "
-        "concise, polite customer support response in plain text (no emojis). Never invent order IDs, amounts, "
-        "refund IDs, or override any policy outcome."
+        "You are Kestrel Supply's AI Support Specialist. Write a clear, concise, empathetic response "
+        "using ONLY the verified server facts provided. Rules: plain text only (NO emojis, NO markdown bold/bullets unless needed), "
+        "preserve exact Order IDs, Refund IDs, Escalation IDs, and ₹ amounts verbatim, and NEVER claim a refund was approved "
+        "if the verified outcome is escalated_high_value, return_window_expired, duplicate_refund, order_not_delivered, "
+        "order_not_accessible, missing_order_id, or guardrail_blocked."
     )
+    user_prompt = (
+        f"Customer message: {user_message}\n\n"
+        f"Verified server outcome JSON:\n{json.dumps(verified_facts, default=str)}"
+    )
+
+    if settings.LLM_PROVIDER == "gemini":
+        gemini_text = _call_gemini_generate(system_prompt, user_prompt, temperature=0.2)
+        if gemini_text:
+            return gemini_text, True
+        return fallback_response, False
+
+    if settings.LLM_PROVIDER != "openai_compatible":
+        return fallback_response, False
+
     payload = {
         "model": settings.LLM_MODEL,
         "temperature": 0.2,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Customer message: {user_message}\n\nVerified server outcome:\n{json.dumps(verified_facts, default=str)}",
-            },
+            {"role": "user", "content": user_prompt},
         ],
     }
     try:
@@ -152,10 +267,10 @@ def _maybe_polish_with_external_llm(
             resp.raise_for_status()
             data = resp.json()
             text = data["choices"][0]["message"]["content"].strip()
-            return text or fallback_response
+            return (text, True) if text else (fallback_response, False)
     except Exception as exc:
         logger.warning("external_llm_fallback", extra={"reason": str(exc)})
-        return fallback_response
+        return fallback_response, False
 
 
 def handle_customer_chat_turn(
@@ -169,11 +284,7 @@ def handle_customer_chat_turn(
     """
     Processes one multi-turn customer chat message on a ticket:
     1. Persists customer message.
-    2. Screens for prompt injection attempts.
-    3. Extracts multi-turn context (order ID, intent, amount).
-    4. Executes deterministic backend tools (get_order_details, search_return_policy,
-       process_refund, escalate_to_human) strictly respecting business rules.
-    5. Persists AI agent response with tool telemetry and updated ticket status.
+    2. Delegates to _respond_to_message for guardrails, tool execution, and reply persistence.
     """
     history = (
         db.query(Message)
@@ -191,6 +302,52 @@ def handle_customer_chat_turn(
     )
     db.add(customer_msg)
     db.flush()
+
+    return _respond_to_message(
+        db,
+        ticket=ticket,
+        customer=customer,
+        customer_msg=customer_msg,
+        history=history,
+        idempotency_key=idempotency_key,
+    )
+
+
+def respond_to_existing_message(
+    db: Session,
+    *,
+    ticket: Ticket,
+    customer: User,
+    customer_msg: Message,
+    idempotency_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Generates and persists an AI agent reply for an already-persisted customer message."""
+    history = (
+        db.query(Message)
+        .filter(Message.ticket_id == ticket.id, Message.id != customer_msg.id)
+        .order_by(Message.created_at.asc())
+        .all()
+    )
+    return _respond_to_message(
+        db,
+        ticket=ticket,
+        customer=customer,
+        customer_msg=customer_msg,
+        history=history,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _respond_to_message(
+    db: Session,
+    *,
+    ticket: Ticket,
+    customer: User,
+    customer_msg: Message,
+    history: List[Message],
+    idempotency_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    content = customer_msg.content
 
     tools_executed: List[str] = []
     guardrail_triggered: Optional[str] = None
@@ -245,7 +402,19 @@ def handle_customer_chat_turn(
     intent = _infer_intent_from_history(content, ticket, history)
     order_id = _extract_order_id(content, ticket, history)
     requested_amount = _extract_requested_amount(content)
+
+    # Use Gemini NLU when deterministic keyword rules see a non-greeting generic turn
+    if intent == "general" and not _is_pure_greeting(content):
+        nlu = _classify_intent_with_gemini(content, ticket, history)
+        if nlu:
+            intent = nlu.get("intent", intent)
+            if not order_id and isinstance(nlu.get("order_id"), str) and nlu["order_id"].upper().startswith("ORD-"):
+                order_id = nlu["order_id"].upper()
+            if requested_amount is None and isinstance(nlu.get("requested_amount"), (int, float)) and nlu["requested_amount"] > 0:
+                requested_amount = float(nlu["requested_amount"])
+
     reply_text = ""
+    customer_order_ids = [o.id for o in customer.orders]
 
     try:
         # 2. Explicit escalation request
@@ -275,28 +444,51 @@ def handle_customer_chat_turn(
         elif intent in ("refund", "order_status") and not order_id:
             ticket.status = "awaiting_customer"
             outcome = "missing_order_id"
-            reply_text = (
-                "Could you share the Order ID you need help with (for example, ORD-1041)? "
-                "Once you provide the Order ID, I can verify delivery status, check the return policy window, "
-                "and process or escalate your request."
-            )
+            if customer_order_ids:
+                order_hint = f" (for example, {customer_order_ids[0]})"
+                reply_text = (
+                    f"Could you share the Order ID you need help with{order_hint}? "
+                    "Once you provide the Order ID, I can verify delivery status, check the return policy window, "
+                    "and process or escalate your request."
+                )
+            else:
+                reply_text = (
+                    "Could you share the Order ID you need help with? "
+                    "I do not see any orders placed on this account yet, so if you have an Order ID, please reply with it and I will check."
+                )
 
-        # 4. Policy inquiry without needing a specific order
-        elif intent == "policy" and not order_id:
-            snippets = search_return_policy(content)
+        # 4. Policy inquiry (works both standalone and inside an existing order-linked ticket)
+        elif intent == "policy":
+            search_query = content
+            order_prefix = ""
+            wants_order_context = bool(_ORDER_ID_RE.search(content)) or any(
+                tok in content.lower() for tok in ("this item", "this order", "my order", "my item")
+            )
+            if order_id and wants_order_context:
+                try:
+                    order_info = get_order_details(db, order_id, customer)
+                    tools_executed.append("get_order_details")
+                    search_query = f"{order_info.category} {content}"
+                    order_prefix = (
+                        f"Order {order_info.id}: {order_info.item_name} ({order_info.category}) — "
+                        f"Status: {order_info.status.upper()} | {order_info.eligibility.reason}\n\n"
+                    )
+                except AppError:
+                    pass
+            snippets = search_return_policy(search_query)
             tools_executed.append("search_return_policy")
             outcome = "policy_answered"
             if snippets:
                 lines = [f"- {item['title']}: {item['content']}" for item in snippets]
-                reply_text = "Here are the relevant Kestrel return and refund policy rules:\n" + "\n".join(lines)
+                reply_text = order_prefix + "Here are the relevant Kestrel return and refund policy rules:\n" + "\n".join(lines)
             else:
-                reply_text = (
+                reply_text = order_prefix + (
                     "Kestrel offers 7 days for Electronics, 14 days for Apparel, 10 days for Homeware, and 2 days "
                     "for Beauty/Consumables (unopened or damaged on arrival). Refunds above ₹5,000.00 require specialist approval."
                 )
 
         # 5. Order-scoped workflows (Order Status or Refund)
-        elif order_id:
+        elif intent in ("refund", "order_status") and order_id:
             try:
                 order_info = get_order_details(db, order_id, customer)
                 tools_executed.append("get_order_details")
@@ -401,16 +593,29 @@ def handle_customer_chat_turn(
                         reply_text += f"\nPolicy reference: {policy_summary}"
 
         else:
-            # General inquiry
-            snippets = search_return_policy(content)
-            if snippets:
-                tools_executed.append("search_return_policy")
-            outcome = "general_guidance"
-            reply_text = (
-                "I can help inspect your orders, verify return eligibility, process eligible refunds up to ₹5,000.00, "
-                "or escalate complex issues to our support specialists. Share an Order ID (such as ORD-1041) or describe "
-                "what you need help with."
-            )
+            # General conversation / greeting
+            if _is_pure_greeting(content):
+                outcome = "greeting"
+                if customer_order_ids:
+                    reply_text = (
+                        f"Hello {customer.name}, welcome to Kestrel Support. How can I help you today? "
+                        f"I can check your orders ({', '.join(customer_order_ids[:3])}), explain our return policy, "
+                        "or help with a refund request."
+                    )
+                else:
+                    reply_text = (
+                        f"Hello {customer.name}, welcome to Kestrel Support. How can I help you today? "
+                        "You can ask about our return and refund policies, share an Order ID, or connect with a specialist."
+                    )
+            else:
+                snippets = search_return_policy(content)
+                if snippets:
+                    tools_executed.append("search_return_policy")
+                outcome = "general_guidance"
+                reply_text = (
+                    "I can help inspect your orders, verify return eligibility, process eligible refunds up to ₹5,000.00, "
+                    "or escalate complex issues to our support specialists. Share an Order ID or describe what you need help with."
+                )
 
     except SQLAlchemyError as db_exc:
         db.rollback()
@@ -421,10 +626,12 @@ def handle_customer_chat_turn(
             "Our resolution service encountered a database error. No refund or state change was committed; please retry shortly.",
         ) from db_exc
 
-    final_reply = _maybe_polish_with_external_llm(
+    final_reply, used_external_llm = _maybe_polish_with_external_llm(
         content,
         {
             "outcome": outcome,
+            "customer_name": customer.name,
+            "customer_orders": customer_order_ids,
             "tools_executed": tools_executed,
             "refund": refund_payload,
             "escalation": escalation_payload,
@@ -433,6 +640,7 @@ def handle_customer_chat_turn(
         reply_text,
     )
 
+    settings = get_settings()
     agent_msg = Message(
         ticket_id=ticket.id,
         sender_type="ai_agent",
@@ -444,6 +652,8 @@ def handle_customer_chat_turn(
             "guardrail_triggered": guardrail_triggered,
             "refund": refund_payload,
             "escalation": escalation_payload,
+            "llm_provider": settings.LLM_PROVIDER if used_external_llm else "local_deterministic",
+            "llm_model": settings.LLM_MODEL if used_external_llm else "deterministic",
         },
     )
     db.add(agent_msg)
