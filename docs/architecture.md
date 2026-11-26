@@ -2,7 +2,7 @@
 
 ## High-Level Architecture & Human-Review Flow
 
-![Kestrel System Architecture Diagram](./architecture_diagram.jpg)
+![Kestrel System Architecture Diagram](./Kestrel%20Support%20Architecture%20Flowchart.png)
 
 ```mermaid
 flowchart LR

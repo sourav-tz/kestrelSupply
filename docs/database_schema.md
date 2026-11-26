@@ -2,7 +2,7 @@
 
 ## Entity-Relationship Diagram
 
-![Kestrel PostgreSQL Database ER Diagram](./er_diagram.jpg)
+![Kestrel PostgreSQL Database ER Diagram](./Kestrel_Support_Suite_ER_Diagram.png)
 
 ```mermaid
 erDiagram
